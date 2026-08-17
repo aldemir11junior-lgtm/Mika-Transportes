@@ -49,6 +49,156 @@ def buscar_usuario_login(usuario_norm):
             {"usuario": usuario_norm},
         ).mappings().first()
     return dict(resultado) if resultado else None
+
+
+def listar_usuarios():
+    """Retorna todos os usuários cadastrados no banco (sem senha_hash)."""
+    with engine.connect() as conn:
+        resultado = conn.execute(
+            text("SELECT id, nome, usuario, perfil FROM usuarios ORDER BY nome")
+        ).mappings().all()
+    return [dict(r) for r in resultado]
+
+
+def buscar_usuario_por_id(usuario_id):
+    """Busca um usuário pelo id (sem senha_hash), usado para edição."""
+    with engine.connect() as conn:
+        resultado = conn.execute(
+            text("SELECT id, nome, usuario, perfil FROM usuarios WHERE id = :id"),
+            {"id": usuario_id},
+        ).mappings().first()
+    return dict(resultado) if resultado else None
+
+
+def usuario_login_existe(usuario_norm, excluir_id=None):
+    """Verifica se já existe um usuário com esse login (usuario), ignorando excluir_id na edição."""
+    with engine.connect() as conn:
+        if excluir_id:
+            resultado = conn.execute(
+                text("SELECT id FROM usuarios WHERE usuario = :usuario AND id != :id"),
+                {"usuario": usuario_norm, "id": excluir_id},
+            ).first()
+        else:
+            resultado = conn.execute(
+                text("SELECT id FROM usuarios WHERE usuario = :usuario"),
+                {"usuario": usuario_norm},
+            ).first()
+    return resultado is not None
+
+
+def criar_usuario_db(nome, usuario_norm, perfil, senha):
+    with engine.connect() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO usuarios (nome, usuario, perfil, senha_hash)
+                VALUES (:nome, :usuario, :perfil, :senha_hash)
+            """),
+            {"nome": nome, "usuario": usuario_norm, "perfil": perfil, "senha_hash": hash_senha(senha)},
+        )
+        conn.commit()
+
+
+def atualizar_usuario_db(usuario_id, nome, usuario_norm, perfil, senha=None):
+    with engine.connect() as conn:
+        if senha:
+            conn.execute(
+                text("""
+                    UPDATE usuarios SET nome=:nome, usuario=:usuario, perfil=:perfil, senha_hash=:senha_hash
+                    WHERE id=:id
+                """),
+                {"nome": nome, "usuario": usuario_norm, "perfil": perfil,
+                 "senha_hash": hash_senha(senha), "id": usuario_id},
+            )
+        else:
+            conn.execute(
+                text("""
+                    UPDATE usuarios SET nome=:nome, usuario=:usuario, perfil=:perfil
+                    WHERE id=:id
+                """),
+                {"nome": nome, "usuario": usuario_norm, "perfil": perfil, "id": usuario_id},
+            )
+        conn.commit()
+
+
+def excluir_usuario_db(usuario_id):
+    with engine.connect() as conn:
+        conn.execute(text("DELETE FROM usuarios WHERE id = :id"), {"id": usuario_id})
+        conn.commit()
+
+
+def listar_usuarios():
+    """Retorna todos os usuários cadastrados no banco (sem senha_hash)."""
+    with engine.connect() as conn:
+        resultado = conn.execute(
+            text("SELECT id, nome, usuario, perfil FROM usuarios ORDER BY nome")
+        ).mappings().all()
+    return [dict(r) for r in resultado]
+
+
+def buscar_usuario_por_id(usuario_id):
+    """Busca um usuário pelo id (sem senha_hash), usado para edição."""
+    with engine.connect() as conn:
+        resultado = conn.execute(
+            text("SELECT id, nome, usuario, perfil FROM usuarios WHERE id = :id"),
+            {"id": usuario_id},
+        ).mappings().first()
+    return dict(resultado) if resultado else None
+
+
+def usuario_login_existe(usuario_norm, excluir_id=None):
+    """Verifica se já existe um usuário com esse login (usuario), ignorando excluir_id na edição."""
+    with engine.connect() as conn:
+        if excluir_id:
+            resultado = conn.execute(
+                text("SELECT id FROM usuarios WHERE usuario = :usuario AND id != :id"),
+                {"usuario": usuario_norm, "id": excluir_id},
+            ).first()
+        else:
+            resultado = conn.execute(
+                text("SELECT id FROM usuarios WHERE usuario = :usuario"),
+                {"usuario": usuario_norm},
+            ).first()
+    return resultado is not None
+
+
+def criar_usuario_db(nome, usuario_norm, perfil, senha):
+    with engine.connect() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO usuarios (nome, usuario, perfil, senha_hash)
+                VALUES (:nome, :usuario, :perfil, :senha_hash)
+            """),
+            {"nome": nome, "usuario": usuario_norm, "perfil": perfil, "senha_hash": hash_senha(senha)},
+        )
+        conn.commit()
+
+
+def atualizar_usuario_db(usuario_id, nome, usuario_norm, perfil, senha=None):
+    with engine.connect() as conn:
+        if senha:
+            conn.execute(
+                text("""
+                    UPDATE usuarios SET nome=:nome, usuario=:usuario, perfil=:perfil, senha_hash=:senha_hash
+                    WHERE id=:id
+                """),
+                {"nome": nome, "usuario": usuario_norm, "perfil": perfil,
+                 "senha_hash": hash_senha(senha), "id": usuario_id},
+            )
+        else:
+            conn.execute(
+                text("""
+                    UPDATE usuarios SET nome=:nome, usuario=:usuario, perfil=:perfil
+                    WHERE id=:id
+                """),
+                {"nome": nome, "usuario": usuario_norm, "perfil": perfil, "id": usuario_id},
+            )
+        conn.commit()
+
+
+def excluir_usuario_db(usuario_id):
+    with engine.connect() as conn:
+        conn.execute(text("DELETE FROM usuarios WHERE id = :id"), {"id": usuario_id})
+        conn.commit()
 CIDADES_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cidades_brasil.json")
 
 
@@ -1296,7 +1446,7 @@ def pagina_usuarios(dados):
 
     with col_form:
         editando_id = st.session_state.get("editando_usuario_id")
-        usuario_edicao = buscar_por_id(dados["usuarios"], editando_id) if editando_id else None
+        usuario_edicao = buscar_usuario_por_id(editando_id) if editando_id else None
 
         st.subheader("Editar usuário" if usuario_edicao else "Cadastrar usuário")
         with st.form("form_usuario"):
@@ -1320,34 +1470,23 @@ def pagina_usuarios(dados):
                     st.error("Informe o nome do usuário.")
                 elif not usuario_norm:
                     st.error("Informe o nome de usuário.")
+                elif usuario_login_existe(usuario_norm, excluir_id=usuario_edicao["id"] if usuario_edicao else None):
+                    st.error("Já existe um usuário com este nome de usuário.")
+                elif usuario_edicao is None and not senha:
+                    st.error("Informe uma senha para o novo usuário.")
                 else:
-                    duplicado = next(
-                        (u for u in dados["usuarios"]
-                         if u["usuario"] == usuario_norm and (not usuario_edicao or u["id"] != usuario_edicao["id"])),
-                        None,
-                    )
-                    if duplicado:
-                        st.error("Já existe um usuário com este nome de usuário.")
-                    elif usuario_edicao is None and not senha:
-                        st.error("Informe uma senha para o novo usuário.")
+                    if usuario_edicao is None:
+                        criar_usuario_db(nome.strip(), usuario_norm, perfil, senha)
+                        st.success("Usuário cadastrado com sucesso!")
                     else:
-                        if usuario_edicao is None:
-                            dados["usuarios"].append({
-                                "id": proximo_id(dados["usuarios"]), "nome": nome.strip(),
-                                "usuario": usuario_norm, "perfil": perfil, "senha_hash": hash_senha(senha),
-                            })
-                            st.success("Usuário cadastrado com sucesso!")
-                        else:
-                            usuario_edicao["nome"] = nome.strip()
-                            usuario_edicao["usuario"] = usuario_norm
-                            usuario_edicao["perfil"] = perfil
-                            if senha:
-                                usuario_edicao["senha_hash"] = hash_senha(senha)
-                            st.success("Usuário atualizado com sucesso!")
-                            st.session_state.pop("editando_usuario_id", None)
+                        atualizar_usuario_db(
+                            usuario_edicao["id"], nome.strip(), usuario_norm, perfil,
+                            senha=senha if senha else None,
+                        )
+                        st.success("Usuário atualizado com sucesso!")
+                        st.session_state.pop("editando_usuario_id", None)
 
-                        salvar_dados(dados)
-                        st.rerun()
+                    st.rerun()
 
         if usuario_edicao and st.button("Cancelar edição"):
             st.session_state.pop("editando_usuario_id", None)
@@ -1355,7 +1494,7 @@ def pagina_usuarios(dados):
 
     with col_lista:
         st.subheader("Usuários cadastrados")
-        for u in dados["usuarios"]:
+        for u in listar_usuarios():
             c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
             c1.write(u["nome"])
             c2.write(u["usuario"])
@@ -1366,8 +1505,7 @@ def pagina_usuarios(dados):
                     st.rerun()
                 if u["id"] != st.session_state.usuario["id"]:
                     if st.button("🗑️", key=f"del_{u['id']}"):
-                        dados["usuarios"] = [x for x in dados["usuarios"] if x["id"] != u["id"]]
-                        salvar_dados(dados)
+                        excluir_usuario_db(u["id"])
                         st.success("Usuário excluído.")
                         st.rerun()
 
