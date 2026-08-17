@@ -25,6 +25,7 @@ from datetime import date, datetime
 import pandas as pd
 import requests
 import streamlit as st
+from sqlalchemy import create_engine, text
 
 # ----------------------------------------------------------------------
 # Configuração e constantes
@@ -33,6 +34,21 @@ CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache.pkl
 COMPROVANTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Comprovantes")
 os.makedirs(COMPROVANTES_DIR, exist_ok=True)
 
+DB_URL = "postgresql://mika_transporte_bd_user:E4rYVaMnwUjd11Vy807WoXaYXVSOwGx2@dpg-da1goh49v7es73bcq950-a.ohio-postgres.render.com/mika_transporte_bd"
+if DB_URL.startswith("postgres://"):
+    DB_URL = DB_URL.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(DB_URL)
+
+
+def buscar_usuario_login(usuario_norm):
+    """Busca um usuário no banco de dados pelo login (usuario). Retorna dict ou None."""
+    with engine.connect() as conn:
+        resultado = conn.execute(
+            text("SELECT id, nome, usuario, senha_hash, perfil FROM usuarios WHERE usuario = :usuario"),
+            {"usuario": usuario_norm},
+        ).mappings().first()
+    return dict(resultado) if resultado else None
 CIDADES_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cidades_brasil.json")
 
 
@@ -164,12 +180,12 @@ STATUS_OPCOES = {
 
 COLUNAS_EXPORT = [
     "id", "data", "veiculo", "carreta", "motorista", "origem", "destino",
-    "distancia_km", "volume_tons", "faturamento_adiantamento", "faturamento_restante",
+    "volume_tons", "faturamento_adiantamento", "faturamento_restante",
     "faturamento", "pedagio", "outros_custos", "custo_total", "status",
 ]
 CABECALHO_EXPORT = [
     "ID", "Data", "Cavalo (Frota)", "Carreta", "Motorista", "Origem", "Destino",
-    "Distância (KM)", "Volume (T)", "Adiantamento (R$)", "Restante (R$)",
+    "Volume (T)", "Adiantamento (R$)", "Restante (R$)",
     "Faturamento Total (R$)", "Pedágio (R$)", "Outros Custos (R$)", "Custo Total (R$)", "Status",
 ]
 
@@ -317,7 +333,6 @@ def viagens_para_dataframe(dados):
             "motorista": nome_motorista(dados, v["motorista_id"]),
             "origem": v["origem"],
             "destino": v["destino"],
-            "distancia_km": v["distancia_km"],
             "volume_tons": v["volume_tons"],
             "faturamento_adiantamento": adiantamento,
             "faturamento_restante": restante,
@@ -362,7 +377,7 @@ def gerar_xlsx(df):
         ws.append([
             int(linha["id"]), linha["data"].strftime("%d/%m/%Y"), linha["veiculo"],
             linha["carreta"], linha["motorista"], linha["origem"], linha["destino"],
-            linha["distancia_km"], linha["volume_tons"],
+            linha["volume_tons"],
             linha["faturamento_adiantamento"], linha["faturamento_restante"], linha["faturamento"],
             linha["pedagio"], linha["outros_custos"], linha["custo_total"],
             STATUS_OPCOES.get(linha["status"], linha["status"]),
@@ -391,7 +406,7 @@ def gerar_pdf(df):
         linhas.append([
             str(int(linha["id"])), linha["data"].strftime("%d/%m/%Y"), linha["veiculo"],
             linha["carreta"], linha["motorista"], linha["origem"], linha["destino"],
-            str(linha["distancia_km"]), str(linha["volume_tons"]),
+            str(linha["volume_tons"]),
             f"R$ {linha['faturamento_adiantamento']:.2f}", f"R$ {linha['faturamento_restante']:.2f}",
             f"R$ {linha['faturamento']:.2f}",
             f"R$ {linha['pedagio']:.2f}", f"R$ {linha['outros_custos']:.2f}", f"R$ {linha['custo_total']:.2f}",
@@ -581,7 +596,7 @@ def tela_login(dados):
 
         if entrar:
             usuario_norm = usuario_input.strip().lower()
-            usuario = next((u for u in dados["usuarios"] if u["usuario"] == usuario_norm), None)
+            usuario = buscar_usuario_login(usuario_norm)
             if usuario and checar_senha(senha, usuario["senha_hash"]):
                 st.session_state.usuario = usuario
                 st.rerun()
@@ -643,60 +658,6 @@ def formulario_viagem(dados, viagem=None):
     sufixo = viagem["id"] if viagem else "novo"
     cidades_brasil = carregar_cidades_brasil()
 
-    st.markdown("**Origem e Destino**")
-    col_o, col_d = st.columns(2)
-    with col_o:
-        if cidades_brasil:
-            origem = st.selectbox(
-                "Origem *", options=cidades_brasil,
-                index=(
-                    cidades_brasil.index(viagem["origem"])
-                    if viagem and viagem.get("origem") in cidades_brasil
-                    else 0
-                ),
-                key=f"origem_{sufixo}",
-            )
-        else:
-            origem = st.text_input(
-                "Origem *", value=viagem["origem"] if viagem else "",
-                help="Lista automática indisponível (sem internet). Digite manualmente.",
-                key=f"origem_txt_{sufixo}",
-            )
-    with col_d:
-        if cidades_brasil:
-            destino = st.selectbox(
-                "Destino *", options=cidades_brasil,
-                index=(
-                    cidades_brasil.index(viagem["destino"])
-                    if viagem and viagem.get("destino") in cidades_brasil
-                    else 0
-                ),
-                key=f"destino_{sufixo}",
-            )
-        else:
-            destino = st.text_input(
-                "Destino *", value=viagem["destino"] if viagem else "",
-                help="Lista automática indisponível (sem internet). Digite manualmente.",
-                key=f"destino_txt_{sufixo}",
-            )
-
-    distancia_km = float(viagem["distancia_km"]) if viagem else 0.0
-    if origem and destino and str(origem).strip() and str(destino).strip():
-        if origem == destino:
-            distancia_km = 0.0
-            st.info("Distância: 0 KM (origem e destino iguais).")
-        else:
-            with st.spinner("Calculando distância entre origem e destino..."):
-                distancia_calculada = calcular_distancia_rodoviaria(origem, destino)
-            if distancia_calculada is not None:
-                distancia_km = distancia_calculada
-                st.success(f"📏 Distância calculada: {distancia_km:.0f} KM")
-            else:
-                st.warning(
-                    "Não foi possível calcular a distância automaticamente (sem internet ou cidade não "
-                    "localizada)." + (f" Mantendo valor anterior: {distancia_km:.0f} KM." if viagem else "")
-                )
-
     with st.form(f"form_viagem_{sufixo}"):
         col1, col2 = st.columns(2)
         with col1:
@@ -704,6 +665,32 @@ def formulario_viagem(dados, viagem=None):
                 "Data da viagem *",
                 value=pd.to_datetime(viagem["data"]).date() if viagem else date.today(),
             )
+            if cidades_brasil:
+                origem = st.selectbox(
+                    "Origem *", options=cidades_brasil,
+                    index=(
+                        cidades_brasil.index(viagem["origem"])
+                        if viagem and viagem.get("origem") in cidades_brasil
+                        else 0
+                    ),
+                )
+                destino = st.selectbox(
+                    "Destino *", options=cidades_brasil,
+                    index=(
+                        cidades_brasil.index(viagem["destino"])
+                        if viagem and viagem.get("destino") in cidades_brasil
+                        else 0
+                    ),
+                )
+            else:
+                origem = st.text_input(
+                    "Origem *", value=viagem["origem"] if viagem else "",
+                    help="Lista automática indisponível (sem internet). Digite manualmente.",
+                )
+                destino = st.text_input(
+                    "Destino *", value=viagem["destino"] if viagem else "",
+                    help="Lista automática indisponível (sem internet). Digite manualmente.",
+                )
             ids_veiculos = [v["id"] for v in veiculos]
             veiculo_id = st.selectbox(
                 "Cavalo (Frota) *", options=ids_veiculos,
@@ -737,10 +724,6 @@ def formulario_viagem(dados, viagem=None):
                 "Status *", options=list(STATUS_OPCOES.keys()),
                 format_func=lambda s: STATUS_OPCOES[s],
                 index=list(STATUS_OPCOES.keys()).index(viagem["status"]) if viagem else 0,
-            )
-            st.number_input(
-                "Distância (KM) — calculada automaticamente",
-                min_value=0.0, value=float(distancia_km), disabled=True,
             )
             volume_tons = st.number_input(
                 "Volume transportado (toneladas)", min_value=0.0, step=1.0,
@@ -790,7 +773,6 @@ def formulario_viagem(dados, viagem=None):
                 "motorista_id": motorista_id,
                 "origem": origem.strip() if isinstance(origem, str) else origem,
                 "destino": destino.strip() if isinstance(destino, str) else destino,
-                "distancia_km": distancia_km,
                 "volume_tons": volume_tons,
                 "faturamento_adiantamento": faturamento_adiantamento,
                 "faturamento_restante": faturamento_restante,
@@ -965,13 +947,8 @@ def pagina_dashboard(dados):
         st.bar_chart(resumo["volume_tons"])
 
     with col3:
-        st.subheader("Custo Médio por KM (R$/KM)")
-        df_valido = df[df["distancia_km"] > 0]
-        custo_medio_km = (
-            (df_valido["custo_total"] / df_valido["distancia_km"]).mean()
-            if not df_valido.empty else 0
-        )
-        st.metric(label="", value=f"R$ {custo_medio_km:.2f}")
+        st.subheader("Faturamento Total (R$)")
+        st.metric(label="", value=f"R$ {df['faturamento'].sum():,.2f}")
 
     st.divider()
     st.subheader("Últimas viagens lançadas")
