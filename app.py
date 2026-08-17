@@ -25,7 +25,13 @@ from datetime import date, datetime
 import pandas as pd
 import requests
 import streamlit as st
+from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
+
+# Carrega variáveis do arquivo .env quando rodando localmente.
+# No Streamlit Cloud, as variáveis vêm de "Secrets" (Settings > Secrets do app),
+# não deste arquivo.
+load_dotenv()
 
 # ----------------------------------------------------------------------
 # Configuração e constantes
@@ -34,7 +40,15 @@ CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache.pkl
 COMPROVANTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Comprovantes")
 os.makedirs(COMPROVANTES_DIR, exist_ok=True)
 
-DB_URL = "postgresql://mika_transporte_bd_user:E4rYVaMnwUjd11Vy807WoXaYXVSOwGx2@dpg-da1goh49v7es73bcq950-a.ohio-postgres.render.com/mika_transporte_bd"
+DB_URL = os.environ.get("DATABASE_URL")
+if not DB_URL:
+    st.error(
+        "⚠️ Variável de ambiente DATABASE_URL não configurada.\n\n"
+        "Local: crie um arquivo .env (veja .env.example) com DATABASE_URL=...\n"
+        "Streamlit Cloud: configure em Settings > Secrets do app."
+    )
+    st.stop()
+
 if DB_URL.startswith("postgres://"):
     DB_URL = DB_URL.replace("postgres://", "postgresql://", 1)
 
