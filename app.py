@@ -377,7 +377,8 @@ def checar_senha(senha, hash_salvo):
 
 
 def dados_iniciais():
-    """Estrutura e dados de exemplo usados na primeira execução."""
+    """Estrutura de exemplo usada na primeira execução (só login/usuários —
+    as demais entidades vivem no banco de dados)."""
     return {
         "usuarios": [
             {"id": 1, "nome": "Gerente XYZ", "usuario": "gerente",
@@ -385,44 +386,33 @@ def dados_iniciais():
             {"id": 2, "nome": "Operacional XYZ", "usuario": "operacional",
              "senha_hash": hash_senha("123456"), "perfil": "operacional"},
         ],
-        "motoristas": [
-            {"id": 1, "nome": "João Motesso", "cnh": "12345678900", "telefone": ""},
-            {"id": 2, "nome": "Mavia Silva", "cnh": "98765432100", "telefone": ""},
-        ],
-        "veiculos": [
-            {"id": 1, "placa": "PN13-0005", "modelo": "Volvo FH 540", "capacidade_kg": 25000},
-            {"id": 2, "placa": "PNT3-0002", "modelo": "Scania R450", "capacidade_kg": 22000},
-        ],
-        "carretas": [
-            {"id": 1, "placa": "CRT1-0001", "modelo": "Carreta Graneleira", "capacidade_kg": 30000},
-            {"id": 2, "placa": "CRT2-0002", "modelo": "Carreta Basculante", "capacidade_kg": 28000},
-        ],
-        "viagens": [],
-        "abastecimentos": [],
     }
 
 
 def carregar_dados():
-    """Lê o cache.pkl do disco. Se não existir, cria com os dados de exemplo."""
+    """Lê os usuários (login) do cache.pkl e as demais entidades direto do banco Postgres."""
     if os.path.exists(CACHE_FILE):
         with open(CACHE_FILE, "rb") as f:
             dados = pickle.load(f)
         if migrar_dados(dados):
             salvar_dados(dados)
-        return dados
-    dados = dados_iniciais()
-    salvar_dados(dados)
+    else:
+        dados = dados_iniciais()
+        salvar_dados(dados)
+
+    dados["motoristas"] = listar_motoristas()
+    dados["veiculos"] = listar_veiculos()
+    dados["carretas"] = listar_carretas()
+    dados["viagens"] = listar_viagens()
+    dados["abastecimentos"] = listar_abastecimentos()
     return dados
 
 
 def migrar_dados(dados):
     """Ajusta caches antigos (.pkl) para a nova estrutura, sem apagar dados existentes.
+    Agora cuida apenas de 'usuarios' (login) — as demais entidades vivem no banco.
     Retorna True se algo foi alterado (precisa salvar de novo)."""
     alterado = False
-
-    if "carretas" not in dados:
-        dados["carretas"] = []
-        alterado = True
 
     for u in dados.get("usuarios", []):
         if "usuario" not in u:
@@ -430,23 +420,6 @@ def migrar_dados(dados):
             u["usuario"] = email_antigo.split("@")[0].strip().lower() if email_antigo else f"usuario{u['id']}"
             u.pop("email", None)
             alterado = True
-
-    for v in dados.get("viagens", []):
-        if "carreta_modelo" not in v:
-            v["carreta_modelo"] = None
-            alterado = True
-        if "faturamento_adiantamento" not in v or "faturamento_restante" not in v:
-            v["faturamento_adiantamento"] = v.get("faturamento", 0.0)
-            v["faturamento_restante"] = 0.0
-            alterado = True
-        if "pedagio" not in v or "outros_custos" not in v:
-            v["pedagio"] = v.get("custo_total", 0.0)
-            v["outros_custos"] = 0.0
-            alterado = True
-
-    if "abastecimentos" not in dados:
-        dados["abastecimentos"] = []
-        alterado = True
 
     return alterado
 
@@ -459,6 +432,196 @@ def salvar_dados(dados):
 def proximo_id(lista):
     return max([item["id"] for item in lista], default=0) + 1
 
+
+# ----------------------------------------------------------------------
+# Persistência no banco de dados (Postgres via DATABASE_URL)
+# ----------------------------------------------------------------------
+def listar_motoristas():
+    with engine.connect() as conn:
+        resultado = conn.execute(text("SELECT id, nome, cnh, telefone FROM motoristas ORDER BY nome"))
+        return [dict(linha._mapping) for linha in resultado]
+
+
+def criar_motorista(nome, cnh, telefone):
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO motoristas (nome, cnh, telefone) VALUES (:nome, :cnh, :telefone)"),
+            {"nome": nome, "cnh": cnh, "telefone": telefone},
+        )
+
+
+def atualizar_motorista(motorista_id, nome, cnh, telefone):
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE motoristas SET nome=:nome, cnh=:cnh, telefone=:telefone WHERE id=:id"),
+            {"nome": nome, "cnh": cnh, "telefone": telefone, "id": motorista_id},
+        )
+
+
+def excluir_motorista(motorista_id):
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM motoristas WHERE id=:id"), {"id": motorista_id})
+
+
+def listar_veiculos():
+    with engine.connect() as conn:
+        resultado = conn.execute(text("SELECT id, placa, modelo, capacidade_kg FROM veiculos ORDER BY placa"))
+        return [dict(linha._mapping) for linha in resultado]
+
+
+def criar_veiculo(placa, modelo, capacidade_kg):
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO veiculos (placa, modelo, capacidade_kg) VALUES (:placa, :modelo, :capacidade_kg)"),
+            {"placa": placa, "modelo": modelo, "capacidade_kg": capacidade_kg},
+        )
+
+
+def atualizar_veiculo(veiculo_id, placa, modelo, capacidade_kg):
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE veiculos SET placa=:placa, modelo=:modelo, capacidade_kg=:capacidade_kg WHERE id=:id"),
+            {"placa": placa, "modelo": modelo, "capacidade_kg": capacidade_kg, "id": veiculo_id},
+        )
+
+
+def excluir_veiculo(veiculo_id):
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM veiculos WHERE id=:id"), {"id": veiculo_id})
+
+
+def listar_carretas():
+    with engine.connect() as conn:
+        resultado = conn.execute(text("SELECT id, placa, modelo, capacidade_kg FROM carretas ORDER BY placa"))
+        return [dict(linha._mapping) for linha in resultado]
+
+
+def criar_carreta(placa, modelo, capacidade_kg):
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO carretas (placa, modelo, capacidade_kg) VALUES (:placa, :modelo, :capacidade_kg)"),
+            {"placa": placa, "modelo": modelo, "capacidade_kg": capacidade_kg},
+        )
+
+
+def atualizar_carreta(carreta_id, placa, modelo, capacidade_kg):
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE carretas SET placa=:placa, modelo=:modelo, capacidade_kg=:capacidade_kg WHERE id=:id"),
+            {"placa": placa, "modelo": modelo, "capacidade_kg": capacidade_kg, "id": carreta_id},
+        )
+
+
+def excluir_carreta(carreta_id):
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM carretas WHERE id=:id"), {"id": carreta_id})
+
+
+def listar_viagens():
+    with engine.connect() as conn:
+        resultado = conn.execute(text("SELECT * FROM viagens ORDER BY data DESC, id DESC"))
+        return [dict(linha._mapping) for linha in resultado]
+
+
+def criar_viagem(registro):
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO viagens
+                (data, veiculo_id, carreta_modelo, motorista_id, origem, destino, volume_tons,
+                 faturamento_adiantamento, faturamento_restante, pedagio, outros_custos, status,
+                 observacoes, criado_por_id)
+                VALUES
+                (:data, :veiculo_id, :carreta_modelo, :motorista_id, :origem, :destino, :volume_tons,
+                 :faturamento_adiantamento, :faturamento_restante, :pedagio, :outros_custos, :status,
+                 :observacoes, :criado_por_id)
+            """),
+            registro,
+        )
+
+
+def atualizar_viagem(viagem_id, registro):
+    parametros = dict(registro, id=viagem_id)
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                UPDATE viagens SET
+                    data=:data, veiculo_id=:veiculo_id, carreta_modelo=:carreta_modelo,
+                    motorista_id=:motorista_id, origem=:origem, destino=:destino,
+                    volume_tons=:volume_tons, faturamento_adiantamento=:faturamento_adiantamento,
+                    faturamento_restante=:faturamento_restante, pedagio=:pedagio,
+                    outros_custos=:outros_custos, status=:status, observacoes=:observacoes
+                WHERE id=:id
+            """),
+            parametros,
+        )
+
+
+def excluir_viagem(viagem_id):
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM viagens WHERE id=:id"), {"id": viagem_id})
+
+
+def listar_abastecimentos():
+    with engine.connect() as conn:
+        resultado = conn.execute(text("""
+            SELECT id, data, veiculo_id, motorista_id, litros, valor_pago, hodometro, cidade,
+                   comprovante_nome, criado_por_id,
+                   (comprovante_dados IS NOT NULL) AS tem_comprovante
+            FROM abastecimentos
+            ORDER BY data DESC, id DESC
+        """))
+        return [dict(linha._mapping) for linha in resultado]
+
+
+def buscar_comprovante(abastecimento_id):
+    with engine.connect() as conn:
+        resultado = conn.execute(
+            text("SELECT comprovante_nome, comprovante_dados FROM abastecimentos WHERE id=:id"),
+            {"id": abastecimento_id},
+        ).mappings().first()
+    return dict(resultado) if resultado else None
+
+
+def criar_abastecimento(registro, comprovante_nome=None, comprovante_bytes=None):
+    parametros = dict(registro, comprovante_nome=comprovante_nome, comprovante_dados=comprovante_bytes)
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO abastecimentos
+                (data, veiculo_id, motorista_id, litros, valor_pago, hodometro, cidade,
+                 comprovante_nome, comprovante_dados, criado_por_id)
+                VALUES
+                (:data, :veiculo_id, :motorista_id, :litros, :valor_pago, :hodometro, :cidade,
+                 :comprovante_nome, :comprovante_dados, :criado_por_id)
+            """),
+            parametros,
+        )
+
+
+def atualizar_abastecimento(abastecimento_id, registro, comprovante_nome=None, comprovante_bytes=None):
+    campos_extra = ""
+    parametros = dict(registro, id=abastecimento_id)
+    if comprovante_bytes is not None:
+        campos_extra = ", comprovante_nome=:comprovante_nome, comprovante_dados=:comprovante_dados"
+        parametros["comprovante_nome"] = comprovante_nome
+        parametros["comprovante_dados"] = comprovante_bytes
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"""
+                UPDATE abastecimentos SET
+                    data=:data, veiculo_id=:veiculo_id, motorista_id=:motorista_id,
+                    litros=:litros, valor_pago=:valor_pago, hodometro=:hodometro, cidade=:cidade
+                    {campos_extra}
+                WHERE id=:id
+            """),
+            parametros,
+        )
+
+
+def excluir_abastecimento(abastecimento_id):
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM abastecimentos WHERE id=:id"), {"id": abastecimento_id})
 
 # ----------------------------------------------------------------------
 # Funções auxiliares de consulta
@@ -608,7 +771,7 @@ def abastecimentos_para_dataframe(dados):
             "valor_por_litro": (valor_pago / litros) if litros else 0.0,
             "hodometro": a["hodometro"],
             "cidade": a["cidade"],
-            "comprovante": "Sim" if a.get("comprovante_arquivo") else "Não",
+            "comprovante": "Sim" if a.get("tem_comprovante") else "Não",
         })
     df = pd.DataFrame(linhas, columns=COLUNAS_EXPORT_COMBUSTIVEL)
     if not df.empty:
@@ -947,19 +1110,13 @@ def formulario_viagem(dados, viagem=None):
             }
 
             if viagem is None:
-                registro["id"] = proximo_id(dados["viagens"])
                 registro["criado_por_id"] = st.session_state.usuario["id"]
-                dados["viagens"].append(registro)
+                criar_viagem(registro)
                 st.success("Viagem lançada com sucesso!")
             else:
-                registro["id"] = viagem["id"]
-                registro["criado_por_id"] = viagem.get("criado_por_id")
-                dados["viagens"] = [
-                    registro if v["id"] == viagem["id"] else v for v in dados["viagens"]
-                ]
+                atualizar_viagem(viagem["id"], registro)
                 st.success("Viagem atualizada com sucesso!")
 
-            salvar_dados(dados)
             st.session_state.pop("editando_viagem_id", None)
             st.rerun()
 def formulario_abastecimento(dados, abastecimento=None):
@@ -971,10 +1128,10 @@ def formulario_abastecimento(dados, abastecimento=None):
         st.warning("Cadastre ao menos um motorista e um cavalo (frota) antes de lançar um abastecimento.")
         return
 
-    if abastecimento and abastecimento.get("comprovante_arquivo"):
-        caminho_atual = os.path.join(COMPROVANTES_DIR, abastecimento["comprovante_arquivo"])
-        if os.path.exists(caminho_atual):
-            st.image(caminho_atual, caption="Comprovante atual", width=220)
+    if abastecimento and abastecimento.get("tem_comprovante"):
+        comprovante_atual = buscar_comprovante(abastecimento["id"])
+        if comprovante_atual and comprovante_atual.get("comprovante_dados"):
+            st.image(comprovante_atual["comprovante_dados"], caption="Comprovante atual", width=220)
 
     with st.form(f"form_abastecimento_{abastecimento['id'] if abastecimento else 'novo'}"):
         col1, col2 = st.columns(2)
@@ -1046,15 +1203,8 @@ def formulario_abastecimento(dados, abastecimento=None):
                     st.error(erro)
                 return
 
-            nome_arquivo_comprovante = abastecimento.get("comprovante_arquivo") if abastecimento else None
-
-            if comprovante is not None:
-                extensao = os.path.splitext(comprovante.name)[1].lower()
-                novo_id = abastecimento["id"] if abastecimento else proximo_id(dados["abastecimentos"])
-                nome_arquivo_comprovante = f"abastecimento_{novo_id}{extensao}"
-                caminho_destino = os.path.join(COMPROVANTES_DIR, nome_arquivo_comprovante)
-                with open(caminho_destino, "wb") as f:
-                    f.write(comprovante.getvalue())
+            comprovante_nome = comprovante.name if comprovante is not None else None
+            comprovante_bytes = comprovante.getvalue() if comprovante is not None else None
 
             registro = {
                 "data": data_abastecimento.isoformat(),
@@ -1064,23 +1214,19 @@ def formulario_abastecimento(dados, abastecimento=None):
                 "valor_pago": valor_pago,
                 "hodometro": hodometro,
                 "cidade": cidade.strip(),
-                "comprovante_arquivo": nome_arquivo_comprovante,
             }
 
             if abastecimento is None:
-                registro["id"] = proximo_id(dados["abastecimentos"])
                 registro["criado_por_id"] = st.session_state.usuario["id"]
-                dados["abastecimentos"].append(registro)
+                criar_abastecimento(registro, comprovante_nome=comprovante_nome, comprovante_bytes=comprovante_bytes)
                 st.success("Abastecimento lançado com sucesso!")
             else:
-                registro["id"] = abastecimento["id"]
-                registro["criado_por_id"] = abastecimento.get("criado_por_id")
-                dados["abastecimentos"] = [
-                    registro if a["id"] == abastecimento["id"] else a for a in dados["abastecimentos"]
-                ]
+                atualizar_abastecimento(
+                    abastecimento["id"], registro,
+                    comprovante_nome=comprovante_nome, comprovante_bytes=comprovante_bytes,
+                )
                 st.success("Abastecimento atualizado com sucesso!")
 
-            salvar_dados(dados)
             st.rerun()
 
 def pagina_dashboard(dados):
@@ -1178,8 +1324,7 @@ def pagina_viagens(dados):
 
             if st.session_state.usuario["perfil"] == "gerente":
                 if st.button("🗑️ Excluir viagem selecionada"):
-                    dados["viagens"] = [v for v in dados["viagens"] if v["id"] != viagem_id]
-                    salvar_dados(dados)
+                    excluir_viagem(viagem_id)
                     st.success("Viagem excluída.")
                     st.rerun()
 
@@ -1203,19 +1348,13 @@ def pagina_motoristas(dados):
                     st.error("Informe o nome do motorista.")
                 else:
                     if motorista_edicao is None:
-                        dados["motoristas"].append({
-                            "id": proximo_id(dados["motoristas"]),
-                            "nome": nome.strip(), "cnh": cnh.strip(), "telefone": telefone.strip(),
-                        })
+                        criar_motorista(nome.strip(), cnh.strip(), telefone.strip())
                         st.success("Motorista cadastrado.")
                     else:
-                        motorista_edicao["nome"] = nome.strip()
-                        motorista_edicao["cnh"] = cnh.strip()
-                        motorista_edicao["telefone"] = telefone.strip()
+                        atualizar_motorista(motorista_edicao["id"], nome.strip(), cnh.strip(), telefone.strip())
                         st.success("Motorista atualizado.")
                         st.session_state.pop("editando_motorista_id", None)
 
-                    salvar_dados(dados)
                     st.rerun()
 
         if motorista_edicao and st.button("Cancelar edição"):
@@ -1235,8 +1374,7 @@ def pagina_motoristas(dados):
                     st.rerun()
                 if st.session_state.usuario["perfil"] == "gerente":
                     if c5.button("🗑️", key=f"del_motorista_{m['id']}"):
-                        dados["motoristas"] = [x for x in dados["motoristas"] if x["id"] != m["id"]]
-                        salvar_dados(dados)
+                        excluir_motorista(m["id"])
                         st.success("Motorista excluído.")
                         st.rerun()
         else:
@@ -1272,20 +1410,13 @@ def pagina_veiculos(dados):
                         st.error("Informe a placa do cavalo.")
                     else:
                         if veiculo_edicao is None:
-                            dados["veiculos"].append({
-                                "id": proximo_id(dados["veiculos"]),
-                                "placa": placa.strip().upper(), "modelo": modelo.strip(),
-                                "capacidade_kg": capacidade_kg,
-                            })
+                            criar_veiculo(placa.strip().upper(), modelo.strip(), capacidade_kg)
                             st.success("Cavalo cadastrado.")
                         else:
-                            veiculo_edicao["placa"] = placa.strip().upper()
-                            veiculo_edicao["modelo"] = modelo.strip()
-                            veiculo_edicao["capacidade_kg"] = capacidade_kg
+                            atualizar_veiculo(veiculo_edicao["id"], placa.strip().upper(), modelo.strip(), capacidade_kg)
                             st.success("Cavalo atualizado.")
                             st.session_state.pop("editando_veiculo_id", None)
 
-                        salvar_dados(dados)
                         st.rerun()
 
             if veiculo_edicao and st.button("Cancelar edição", key="cancelar_edicao_veiculo"):
@@ -1305,8 +1436,7 @@ def pagina_veiculos(dados):
                         st.rerun()
                     if st.session_state.usuario["perfil"] == "gerente":
                         if c5.button("🗑️", key=f"del_veiculo_{v['id']}"):
-                            dados["veiculos"] = [x for x in dados["veiculos"] if x["id"] != v["id"]]
-                            salvar_dados(dados)
+                            excluir_veiculo(v["id"])
                             st.success("Cavalo excluído.")
                             st.rerun()
             else:
@@ -1341,20 +1471,13 @@ def pagina_veiculos(dados):
                         st.error("Informe o modelo da carreta.")
                     else:
                         if carreta_edicao is None:
-                            dados["carretas"].append({
-                                "id": proximo_id(dados["carretas"]),
-                                "placa": placa.strip().upper(), "modelo": modelo.strip(),
-                                "capacidade_kg": capacidade_kg,
-                            })
+                            criar_carreta(placa.strip().upper(), modelo.strip(), capacidade_kg)
                             st.success("Carreta cadastrada.")
                         else:
-                            carreta_edicao["placa"] = placa.strip().upper()
-                            carreta_edicao["modelo"] = modelo.strip()
-                            carreta_edicao["capacidade_kg"] = capacidade_kg
+                            atualizar_carreta(carreta_edicao["id"], placa.strip().upper(), modelo.strip(), capacidade_kg)
                             st.success("Carreta atualizada.")
                             st.session_state.pop("editando_carreta_id", None)
 
-                        salvar_dados(dados)
                         st.rerun()
 
             if carreta_edicao and st.button("Cancelar edição", key="cancelar_edicao_carreta"):
@@ -1374,8 +1497,7 @@ def pagina_veiculos(dados):
                         st.rerun()
                     if st.session_state.usuario["perfil"] == "gerente":
                         if c5.button("🗑️", key=f"del_carreta_{carreta['id']}"):
-                            dados["carretas"] = [x for x in dados["carretas"] if x["id"] != carreta["id"]]
-                            salvar_dados(dados)
+                            excluir_carreta(carreta["id"])
                             st.success("Carreta excluída.")
                             st.rerun()
             else:
@@ -1438,14 +1560,7 @@ def pagina_combustivel(dados):
 
             if st.session_state.usuario["perfil"] == "gerente":
                 if st.button("🗑️ Excluir abastecimento selecionado"):
-                    if abastecimento_sel.get("comprovante_arquivo"):
-                        caminho_arquivo = os.path.join(COMPROVANTES_DIR, abastecimento_sel["comprovante_arquivo"])
-                        if os.path.exists(caminho_arquivo):
-                            os.remove(caminho_arquivo)
-                    dados["abastecimentos"] = [
-                        a for a in dados["abastecimentos"] if a["id"] != abastecimento_id
-                    ]
-                    salvar_dados(dados)
+                    excluir_abastecimento(abastecimento_id)
                     st.success("Abastecimento excluído.")
                     st.rerun()
 
