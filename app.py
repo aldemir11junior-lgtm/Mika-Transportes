@@ -23,6 +23,7 @@ import pickle
 from datetime import date, datetime
 
 import pandas as pd
+import plotly.graph_objects as go
 import requests
 import streamlit as st
 from dotenv import load_dotenv
@@ -355,12 +356,117 @@ CABECALHO_EXPORT = [
 
 COLUNAS_EXPORT_COMBUSTIVEL = [
     "id", "data", "veiculo", "motorista", "litros", "valor_pago",
-    "valor_por_litro", "hodometro", "cidade", "comprovante",
+    "valor_por_litro", "hodometro", "km_rodado", "cidade", "comprovante",
 ]
 CABECALHO_EXPORT_COMBUSTIVEL = [
     "ID", "Data", "Veículo", "Motorista", "Litros", "Valor Pago (R$)",
-    "R$/Litro", "Hodômetro (KM)", "Cidade", "Comprovante",
+    "R$/Litro", "Hodômetro (KM)", "KM Rodado", "Cidade", "Comprovante",
 ]
+
+COR_RECEITA = "#2ecc71"
+COR_DESPESA = "#e74c3c"
+COR_LUCRO = "#f39c12"
+COR_QTD = "#2d8eca"
+COR_CARD_BG = "#1a2b47"
+COR_CARD_BORDE = "#2d8eca"
+
+
+def cartao_kpi(icone, titulo, valor, subtitulo=""):
+    return f"""
+    <div style="
+        background: linear-gradient(135deg, {COR_CARD_BG}, #16213b);
+        border: 1px solid {COR_CARD_BORDE}55;
+        border-radius: 12px;
+        padding: 18px 16px;
+        text-align: center;
+        height: 100%;
+    ">
+        <div style="font-size:1.5rem;">{icone}</div>
+        <div style="color:#9fb3c8; font-size:0.75rem; text-transform:uppercase;
+                    letter-spacing:0.04em; margin-top:6px;">{titulo}</div>
+        <div style="color:#f2f2f2; font-size:1.55rem; font-weight:700; margin-top:2px;">{valor}</div>
+        <div style="color:#7d92aa; font-size:0.72rem; margin-top:2px;">{subtitulo}</div>
+    </div>
+    """
+
+
+def grafico_rdl_empilhado(receita_serie, despesa_serie, categoria_nome):
+    """Gráfico de colunas empilhadas: Receita (verde) + Despesa (vermelho) + Lucro (laranja)."""
+    categorias = sorted(set(receita_serie.index) | set(despesa_serie.index))
+    receitas = [float(receita_serie.get(c, 0.0)) for c in categorias]
+    despesas = [float(despesa_serie.get(c, 0.0)) for c in categorias]
+    lucros = [r - d for r, d in zip(receitas, despesas)]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=categorias, y=receitas, name="Receita", marker_color=COR_RECEITA,
+        text=[f"R$ {v:,.0f}" for v in receitas], textposition="inside",
+    ))
+    fig.add_trace(go.Bar(
+        x=categorias, y=despesas, name="Despesa", marker_color=COR_DESPESA,
+        text=[f"R$ {v:,.0f}" for v in despesas], textposition="inside",
+    ))
+    fig.add_trace(go.Bar(
+        x=categorias, y=lucros, name="Lucro", marker_color=COR_LUCRO,
+        text=[f"R$ {v:,.0f}" for v in lucros], textposition="inside",
+    ))
+    fig.update_layout(
+        barmode="stack",
+        height=380,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#e6e6e6"),
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+            font=dict(color="#e6e6e6"),
+        ),
+        xaxis=dict(title=categoria_nome, gridcolor="#2a3f5f", tickangle=-20),
+        yaxis=dict(title="R$", gridcolor="#2a3f5f"),
+        margin=dict(t=30, b=40, l=40, r=20),
+    )
+    return fig
+
+
+def grafico_quantidade(df_contagem, coluna_categoria, titulo_eixo):
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=df_contagem[coluna_categoria], y=df_contagem["Quantidade"],
+        marker_color=COR_QTD, text=df_contagem["Quantidade"], textposition="outside",
+    ))
+    fig.update_layout(
+        height=320,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#e6e6e6"),
+        legend=dict(font=dict(color="#e6e6e6")),
+        xaxis=dict(title=titulo_eixo, gridcolor="#2a3f5f", tickangle=-20),
+        yaxis=dict(title="Quantidade", gridcolor="#2a3f5f"),
+        margin=dict(t=20, b=40, l=40, r=20),
+    )
+    return fig
+
+
+COR_CUSTO_KM = "#8e44ad"
+
+
+def grafico_custo_km(df_custo_km):
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=df_custo_km["veiculo"], y=df_custo_km["custo_por_km"],
+        marker_color=COR_CUSTO_KM,
+        text=[f"R$ {v:,.2f}" for v in df_custo_km["custo_por_km"]], textposition="outside",
+    ))
+    fig.update_layout(
+        height=350,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#e6e6e6"),
+        legend=dict(font=dict(color="#e6e6e6")),
+        xaxis=dict(title="Caminhão", gridcolor="#2a3f5f", tickangle=-20),
+        yaxis=dict(title="R$ / KM", gridcolor="#2a3f5f"),
+        margin=dict(t=20, b=40, l=40, r=20),
+    )
+    return fig
 
 
 # ----------------------------------------------------------------------
@@ -436,6 +542,7 @@ def proximo_id(lista):
 # ----------------------------------------------------------------------
 # Persistência no banco de dados (Postgres via DATABASE_URL)
 # ----------------------------------------------------------------------
+@st.cache_data(ttl=300, show_spinner=False)
 def listar_motoristas():
     with engine.connect() as conn:
         resultado = conn.execute(text("SELECT id, nome, cnh, telefone FROM motoristas ORDER BY nome"))
@@ -448,6 +555,7 @@ def criar_motorista(nome, cnh, telefone):
             text("INSERT INTO motoristas (nome, cnh, telefone) VALUES (:nome, :cnh, :telefone)"),
             {"nome": nome, "cnh": cnh, "telefone": telefone},
         )
+    listar_motoristas.clear()
 
 
 def atualizar_motorista(motorista_id, nome, cnh, telefone):
@@ -456,13 +564,16 @@ def atualizar_motorista(motorista_id, nome, cnh, telefone):
             text("UPDATE motoristas SET nome=:nome, cnh=:cnh, telefone=:telefone WHERE id=:id"),
             {"nome": nome, "cnh": cnh, "telefone": telefone, "id": motorista_id},
         )
+    listar_motoristas.clear()
 
 
 def excluir_motorista(motorista_id):
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM motoristas WHERE id=:id"), {"id": motorista_id})
+    listar_motoristas.clear()
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def listar_veiculos():
     with engine.connect() as conn:
         resultado = conn.execute(text("SELECT id, placa, modelo, capacidade_kg FROM veiculos ORDER BY placa"))
@@ -475,6 +586,7 @@ def criar_veiculo(placa, modelo, capacidade_kg):
             text("INSERT INTO veiculos (placa, modelo, capacidade_kg) VALUES (:placa, :modelo, :capacidade_kg)"),
             {"placa": placa, "modelo": modelo, "capacidade_kg": capacidade_kg},
         )
+    listar_veiculos.clear()
 
 
 def atualizar_veiculo(veiculo_id, placa, modelo, capacidade_kg):
@@ -483,13 +595,16 @@ def atualizar_veiculo(veiculo_id, placa, modelo, capacidade_kg):
             text("UPDATE veiculos SET placa=:placa, modelo=:modelo, capacidade_kg=:capacidade_kg WHERE id=:id"),
             {"placa": placa, "modelo": modelo, "capacidade_kg": capacidade_kg, "id": veiculo_id},
         )
+    listar_veiculos.clear()
 
 
 def excluir_veiculo(veiculo_id):
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM veiculos WHERE id=:id"), {"id": veiculo_id})
+    listar_veiculos.clear()
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def listar_carretas():
     with engine.connect() as conn:
         resultado = conn.execute(text("SELECT id, placa, modelo, capacidade_kg FROM carretas ORDER BY placa"))
@@ -502,6 +617,7 @@ def criar_carreta(placa, modelo, capacidade_kg):
             text("INSERT INTO carretas (placa, modelo, capacidade_kg) VALUES (:placa, :modelo, :capacidade_kg)"),
             {"placa": placa, "modelo": modelo, "capacidade_kg": capacidade_kg},
         )
+    listar_carretas.clear()
 
 
 def atualizar_carreta(carreta_id, placa, modelo, capacidade_kg):
@@ -510,13 +626,16 @@ def atualizar_carreta(carreta_id, placa, modelo, capacidade_kg):
             text("UPDATE carretas SET placa=:placa, modelo=:modelo, capacidade_kg=:capacidade_kg WHERE id=:id"),
             {"placa": placa, "modelo": modelo, "capacidade_kg": capacidade_kg, "id": carreta_id},
         )
+    listar_carretas.clear()
 
 
 def excluir_carreta(carreta_id):
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM carretas WHERE id=:id"), {"id": carreta_id})
+    listar_carretas.clear()
 
 
+@st.cache_data(ttl=120, show_spinner=False)
 def listar_viagens():
     with engine.connect() as conn:
         resultado = conn.execute(text("SELECT * FROM viagens ORDER BY data DESC, id DESC"))
@@ -538,6 +657,7 @@ def criar_viagem(registro):
             """),
             registro,
         )
+    listar_viagens.clear()
 
 
 def atualizar_viagem(viagem_id, registro):
@@ -555,13 +675,16 @@ def atualizar_viagem(viagem_id, registro):
             """),
             parametros,
         )
+    listar_viagens.clear()
 
 
 def excluir_viagem(viagem_id):
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM viagens WHERE id=:id"), {"id": viagem_id})
+    listar_viagens.clear()
 
 
+@st.cache_data(ttl=120, show_spinner=False)
 def listar_abastecimentos():
     with engine.connect() as conn:
         resultado = conn.execute(text("""
@@ -597,6 +720,7 @@ def criar_abastecimento(registro, comprovante_nome=None, comprovante_bytes=None)
             """),
             parametros,
         )
+    listar_abastecimentos.clear()
 
 
 def atualizar_abastecimento(abastecimento_id, registro, comprovante_nome=None, comprovante_bytes=None):
@@ -617,11 +741,13 @@ def atualizar_abastecimento(abastecimento_id, registro, comprovante_nome=None, c
             """),
             parametros,
         )
+    listar_abastecimentos.clear()
 
 
 def excluir_abastecimento(abastecimento_id):
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM abastecimentos WHERE id=:id"), {"id": abastecimento_id})
+    listar_abastecimentos.clear()
 
 # ----------------------------------------------------------------------
 # Funções auxiliares de consulta
@@ -757,6 +883,23 @@ def gerar_pdf(df):
     doc.build(elementos)
     return buffer.getvalue()
 def abastecimentos_para_dataframe(dados):
+    # Calcula o KM rodado de cada abastecimento em relação ao abastecimento
+    # anterior do MESMO caminhão (ordenado por data). O primeiro abastecimento
+    # de cada caminhão fica sem KM rodado (não há referência anterior).
+    abastecimentos_ordenados = sorted(
+        dados["abastecimentos"], key=lambda a: (a["veiculo_id"], a["data"], a["id"])
+    )
+    km_rodado_por_id = {}
+    hodometro_anterior_por_veiculo = {}
+    for a in abastecimentos_ordenados:
+        veiculo_id = a["veiculo_id"]
+        hodometro_atual = float(a["hodometro"])
+        if veiculo_id in hodometro_anterior_por_veiculo:
+            km_rodado_por_id[a["id"]] = hodometro_atual - hodometro_anterior_por_veiculo[veiculo_id]
+        else:
+            km_rodado_por_id[a["id"]] = None
+        hodometro_anterior_por_veiculo[veiculo_id] = hodometro_atual
+
     linhas = []
     for a in dados["abastecimentos"]:
         litros = float(a["litros"])
@@ -770,6 +913,7 @@ def abastecimentos_para_dataframe(dados):
             "valor_pago": valor_pago,
             "valor_por_litro": (valor_pago / litros) if litros else 0.0,
             "hodometro": a["hodometro"],
+            "km_rodado": km_rodado_por_id.get(a["id"]),
             "cidade": a["cidade"],
             "comprovante": "Sim" if a.get("tem_comprovante") else "Não",
         })
@@ -802,7 +946,9 @@ def gerar_xlsx_combustivel(df):
         ws.append([
             int(linha["id"]), linha["data"].strftime("%d/%m/%Y"), linha["veiculo"], linha["motorista"],
             linha["litros"], linha["valor_pago"], round(linha["valor_por_litro"], 3),
-            linha["hodometro"], linha["cidade"], linha["comprovante"],
+            linha["hodometro"],
+            round(linha["km_rodado"], 1) if pd.notna(linha["km_rodado"]) else "-",
+            linha["cidade"], linha["comprovante"],
         ])
     for coluna in ws.columns:
         largura = max((len(str(c.value)) for c in coluna if c.value is not None), default=10) + 2
@@ -828,7 +974,9 @@ def gerar_pdf_combustivel(df):
         linhas.append([
             str(int(linha["id"])), linha["data"].strftime("%d/%m/%Y"), linha["veiculo"], linha["motorista"],
             str(linha["litros"]), f"R$ {linha['valor_pago']:.2f}", f"R$ {linha['valor_por_litro']:.3f}",
-            str(linha["hodometro"]), linha["cidade"], linha["comprovante"],
+            str(linha["hodometro"]),
+            f"{linha['km_rodado']:.1f}" if pd.notna(linha["km_rodado"]) else "-",
+            linha["cidade"], linha["comprovante"],
         ])
 
     tabela = Table(linhas, repeatRows=1)
@@ -851,15 +999,20 @@ def gerar_pdf_combustivel(df):
 # ----------------------------------------------------------------------
 # Telas
 # ----------------------------------------------------------------------
-def aplicar_fundo_com_imagem():
-    """Aplica a imagem de fundo escurecida (login e menu inicial) e o estilo
-    de botões em gradiente azul com fonte cinza claro."""
+@st.cache_data(show_spinner=False)
+def _carregar_imagem_fundo_b64():
     import base64
     caminho_imagem = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "Imagens", "124-basculante.jpg"
     )
     with open(caminho_imagem, "rb") as f:
-        imagem_b64 = base64.b64encode(f.read()).decode()
+        return base64.b64encode(f.read()).decode()
+
+
+def aplicar_fundo_com_imagem():
+    """Aplica a imagem de fundo escurecida (login e menu inicial) e o estilo
+    de botões em gradiente azul com fonte cinza claro."""
+    imagem_b64 = _carregar_imagem_fundo_b64()
 
     st.markdown(
         f"""
@@ -983,6 +1136,11 @@ def formulario_viagem(dados, viagem=None):
         return
 
     sufixo = viagem["id"] if viagem else "novo"
+
+    chave_msg = f"msg_viagem_{sufixo}"
+    if st.session_state.get(chave_msg):
+        st.success(st.session_state.pop(chave_msg))
+
     cidades_brasil = carregar_cidades_brasil()
 
     with st.form(f"form_viagem_{sufixo}"):
@@ -993,12 +1151,18 @@ def formulario_viagem(dados, viagem=None):
                 value=pd.to_datetime(viagem["data"]).date() if viagem else date.today(),
             )
             if cidades_brasil:
+                cidade_padrao_origem = "Três Lagoas - MS"
+                indice_padrao_origem = (
+                    cidades_brasil.index(cidade_padrao_origem)
+                    if cidade_padrao_origem in cidades_brasil
+                    else 0
+                )
                 origem = st.selectbox(
                     "Origem *", options=cidades_brasil,
                     index=(
                         cidades_brasil.index(viagem["origem"])
                         if viagem and viagem.get("origem") in cidades_brasil
-                        else 0
+                        else indice_padrao_origem
                     ),
                 )
                 destino = st.selectbox(
@@ -1112,10 +1276,10 @@ def formulario_viagem(dados, viagem=None):
             if viagem is None:
                 registro["criado_por_id"] = st.session_state.usuario["id"]
                 criar_viagem(registro)
-                st.success("Viagem lançada com sucesso!")
+                st.session_state["msg_viagem_novo"] = "Viagem lançada com sucesso!"
             else:
                 atualizar_viagem(viagem["id"], registro)
-                st.success("Viagem atualizada com sucesso!")
+                st.session_state[f"msg_viagem_{viagem['id']}"] = "Viagem atualizada com sucesso!"
 
             st.session_state.pop("editando_viagem_id", None)
             st.rerun()
@@ -1152,12 +1316,18 @@ def formulario_abastecimento(dados, abastecimento=None):
             )
             cidades_brasil = carregar_cidades_brasil()
             if cidades_brasil:
+                cidade_padrao_abastecimento = "Três Lagoas - MS"
+                indice_padrao_abastecimento = (
+                    cidades_brasil.index(cidade_padrao_abastecimento)
+                    if cidade_padrao_abastecimento in cidades_brasil
+                    else 0
+                )
                 cidade = st.selectbox(
                     "Cidade *", options=cidades_brasil,
                     index=(
                         cidades_brasil.index(abastecimento["cidade"])
                         if abastecimento and abastecimento.get("cidade") in cidades_brasil
-                        else 0
+                        else indice_padrao_abastecimento
                     ),
                 )
             else:
@@ -1235,30 +1405,134 @@ def pagina_dashboard(dados):
         st.info("Nenhuma viagem lançada ainda. Lance a primeira em **Viagens**.")
         return
 
-    ano_atual = date.today().year
-    df_ano = df[df["data"].dt.year == ano_atual].copy()
-    df_ano["mes"] = df_ano["data"].dt.month
+    df_abastecimentos = abastecimentos_para_dataframe(dados)
 
-    resumo = df_ano.groupby("mes").agg(
-        faturamento=("faturamento", "sum"),
-        custo_total=("custo_total", "sum"),
-        volume_tons=("volume_tons", "sum"),
-    ).reindex(range(1, 13), fill_value=0)
-    resumo.index = MESES_PT
+    st.subheader("Filtros")
+    col_data_ini, col_data_fim, col_veiculo, col_motorista = st.columns(4)
+    with col_data_ini:
+        data_inicio = st.date_input("Data inicial", value=df["data"].min().date(), key="dash_data_inicio")
+    with col_data_fim:
+        data_fim = st.date_input("Data final", value=df["data"].max().date(), key="dash_data_fim")
+    with col_veiculo:
+        placas_disponiveis = sorted(df["veiculo"].dropna().unique().tolist())
+        veiculo_sel = st.selectbox("Caminhão", options=["Todos"] + placas_disponiveis, key="dash_veiculo")
+    with col_motorista:
+        motoristas_disponiveis = sorted(df["motorista"].dropna().unique().tolist())
+        motorista_sel = st.selectbox("Motorista", options=["Todos"] + motoristas_disponiveis, key="dash_motorista")
 
-    col1, col2, col3 = st.columns(3)
+    df_filtrado = df[
+        (df["data"].dt.date >= data_inicio) & (df["data"].dt.date <= data_fim)
+    ].copy()
+    if veiculo_sel != "Todos":
+        df_filtrado = df_filtrado[df_filtrado["veiculo"] == veiculo_sel]
+    if motorista_sel != "Todos":
+        df_filtrado = df_filtrado[df_filtrado["motorista"] == motorista_sel]
 
-    with col1:
-        st.subheader("Faturamento vs. Custo Total (R$)")
-        st.line_chart(resumo[["faturamento", "custo_total"]])
+    df_abast_filtrado = df_abastecimentos.copy()
+    if not df_abast_filtrado.empty:
+        df_abast_filtrado = df_abast_filtrado[
+            (df_abast_filtrado["data"].dt.date >= data_inicio) & (df_abast_filtrado["data"].dt.date <= data_fim)
+        ]
+        if veiculo_sel != "Todos":
+            df_abast_filtrado = df_abast_filtrado[df_abast_filtrado["veiculo"] == veiculo_sel]
+        if motorista_sel != "Todos":
+            df_abast_filtrado = df_abast_filtrado[df_abast_filtrado["motorista"] == motorista_sel]
 
-    with col2:
-        st.subheader("Volume de Carga (Toneladas)")
-        st.bar_chart(resumo["volume_tons"])
+    receita_total = df_filtrado["faturamento"].sum()
+    despesa_viagens = df_filtrado["pedagio"].sum() + df_filtrado["outros_custos"].sum()
+    despesa_combustivel = df_abast_filtrado["valor_pago"].sum() if not df_abast_filtrado.empty else 0.0
+    despesa_total = despesa_viagens + despesa_combustivel
+    lucro_total = receita_total - despesa_total
+    qtd_lancamentos = len(df_filtrado)
 
-    with col3:
-        st.subheader("Faturamento Total (R$)")
-        st.metric(label="", value=f"R$ {df['faturamento'].sum():,.2f}")
+    st.divider()
+    card1, card2, card3, card4 = st.columns(4)
+    with card1:
+        st.markdown(cartao_kpi("💰", "Receita Total", f"R$ {receita_total:,.2f}"), unsafe_allow_html=True)
+    with card2:
+        st.markdown(cartao_kpi("💸", "Despesa Total", f"R$ {despesa_total:,.2f}"), unsafe_allow_html=True)
+    with card3:
+        st.markdown(cartao_kpi("📈", "Lucro (Receita - Despesa)", f"R$ {lucro_total:,.2f}"), unsafe_allow_html=True)
+    with card4:
+        st.markdown(cartao_kpi("🚛", "Viagens Lançadas", f"{qtd_lancamentos}"), unsafe_allow_html=True)
+
+    st.divider()
+    st.subheader("Receita, Despesa e Lucro por Caminhão e por Motorista")
+
+    receita_veiculo = df_filtrado.groupby("veiculo")["faturamento"].sum()
+    despesa_veiculo_viagem = (df_filtrado["pedagio"] + df_filtrado["outros_custos"]).groupby(df_filtrado["veiculo"]).sum()
+    despesa_veiculo_combustivel = (
+        df_abast_filtrado.groupby("veiculo")["valor_pago"].sum() if not df_abast_filtrado.empty else pd.Series(dtype=float)
+    )
+    despesa_veiculo = despesa_veiculo_viagem.add(despesa_veiculo_combustivel, fill_value=0.0)
+
+    receita_motorista = df_filtrado.groupby("motorista")["faturamento"].sum()
+    despesa_motorista_viagem = (df_filtrado["pedagio"] + df_filtrado["outros_custos"]).groupby(df_filtrado["motorista"]).sum()
+    despesa_motorista_combustivel = (
+        df_abast_filtrado.groupby("motorista")["valor_pago"].sum() if not df_abast_filtrado.empty else pd.Series(dtype=float)
+    )
+    despesa_motorista = despesa_motorista_viagem.add(despesa_motorista_combustivel, fill_value=0.0)
+
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        st.caption("Por Caminhão")
+        st.plotly_chart(grafico_rdl_empilhado(receita_veiculo, despesa_veiculo, "Caminhão"), use_container_width=True)
+    with col_g2:
+        st.caption("Por Motorista")
+        st.plotly_chart(grafico_rdl_empilhado(receita_motorista, despesa_motorista, "Motorista"), use_container_width=True)
+
+    st.divider()
+    st.subheader("Receita, Despesa e Lucro por Mês")
+
+    df_filtrado_mes = df_filtrado.copy()
+    df_filtrado_mes["mes_ano"] = df_filtrado_mes["data"].dt.strftime("%Y-%m")
+    receita_mes = df_filtrado_mes.groupby("mes_ano")["faturamento"].sum()
+    despesa_mes_viagem = (df_filtrado_mes["pedagio"] + df_filtrado_mes["outros_custos"]).groupby(df_filtrado_mes["mes_ano"]).sum()
+    if not df_abast_filtrado.empty:
+        df_abast_mes = df_abast_filtrado.copy()
+        df_abast_mes["mes_ano"] = df_abast_mes["data"].dt.strftime("%Y-%m")
+        despesa_mes_combustivel = df_abast_mes.groupby("mes_ano")["valor_pago"].sum()
+    else:
+        despesa_mes_combustivel = pd.Series(dtype=float)
+    despesa_mes = despesa_mes_viagem.add(despesa_mes_combustivel, fill_value=0.0)
+
+    st.plotly_chart(grafico_rdl_empilhado(receita_mes, despesa_mes, "Mês"), use_container_width=True)
+
+    st.divider()
+    st.subheader("Quantidade de Viagens Lançadas")
+
+    col_g3, col_g4 = st.columns(2)
+    with col_g3:
+        st.caption("Por Mês")
+        qtd_mes = df_filtrado_mes.groupby("mes_ano").size().reset_index(name="Quantidade")
+        st.plotly_chart(grafico_quantidade(qtd_mes, "mes_ano", "Mês"), use_container_width=True)
+    with col_g4:
+        st.caption("Por Caminhão")
+        qtd_veiculo = df_filtrado.groupby("veiculo").size().reset_index(name="Quantidade")
+        st.plotly_chart(grafico_quantidade(qtd_veiculo, "veiculo", "Caminhão"), use_container_width=True)
+
+    st.divider()
+    st.subheader("Custo por KM Rodado (por Caminhão)")
+
+    km_veiculo = (
+        df_abast_filtrado.groupby("veiculo")["km_rodado"].sum()
+        if not df_abast_filtrado.empty else pd.Series(dtype=float)
+    )
+    linhas_custo_km = []
+    for veiculo_nome in despesa_veiculo.index:
+        km_total = km_veiculo.get(veiculo_nome, 0.0)
+        if km_total and km_total > 0:
+            custo_km = despesa_veiculo[veiculo_nome] / km_total
+            linhas_custo_km.append({"veiculo": veiculo_nome, "custo_por_km": custo_km})
+
+    if linhas_custo_km:
+        df_custo_km = pd.DataFrame(linhas_custo_km).sort_values("custo_por_km", ascending=False)
+        st.plotly_chart(grafico_custo_km(df_custo_km), use_container_width=True)
+    else:
+        st.info(
+            "Sem quilometragem suficiente registrada (é necessário ao menos 2 abastecimentos "
+            "por caminhão dentro do filtro selecionado) para calcular o custo por KM."
+        )
 
     st.divider()
     st.subheader("Últimas viagens lançadas")
@@ -1269,6 +1543,18 @@ def pagina_dashboard(dados):
         ultimas.drop(columns=["id"]).rename(columns=dict(zip(COLUNAS_EXPORT[1:], CABECALHO_EXPORT[1:]))),
         use_container_width=True, hide_index=True,
     )
+
+    st.divider()
+    col_voltar, col_sair, _ = st.columns([1, 1, 4])
+    with col_voltar:
+        if st.button("🔙 Voltar ao menu inicial", key="voltar_dashboard", use_container_width=True):
+            st.session_state.pagina_atual = None
+            st.rerun()
+    with col_sair:
+        if st.button("🚪 Sair", key="sair_dashboard", use_container_width=True):
+            st.session_state.usuario = None
+            st.session_state.pagina_atual = None
+            st.rerun()
 
 
 def pagina_viagens(dados):
@@ -1284,49 +1570,60 @@ def pagina_viagens(dados):
 
         if df.empty:
             st.info("Nenhuma viagem cadastrada ainda.")
-            return
-
-        col_a, col_b, col_c, _ = st.columns([1, 1, 1, 3])
-        with col_a:
-            st.download_button("⬇ CSV", gerar_csv(df), "viagens.csv", "text/csv", use_container_width=True)
-        with col_b:
-            st.download_button(
-                "⬇ Excel", gerar_xlsx(df), "viagens.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+        else:
+            tabela = df.sort_values("data", ascending=False).copy()
+            tabela["data"] = tabela["data"].dt.strftime("%d/%m/%Y")
+            tabela["status"] = tabela["status"].map(STATUS_OPCOES)
+            st.dataframe(
+                tabela.rename(columns=dict(zip(COLUNAS_EXPORT, CABECALHO_EXPORT))),
+                use_container_width=True, hide_index=True,
             )
-        with col_c:
-            st.download_button("⬇ PDF", gerar_pdf(df), "viagens.pdf", "application/pdf", use_container_width=True)
 
-        st.divider()
+            st.divider()
+            st.subheader("Editar ou excluir uma viagem")
+            opcoes_id = [v["id"] for v in dados["viagens"]]
+            if opcoes_id:
+                viagem_id = st.selectbox(
+                    "Selecione pelo ID", options=opcoes_id,
+                    format_func=lambda vid: f"#{vid} — {buscar_por_id(dados['viagens'], vid)['origem']} → "
+                                             f"{buscar_por_id(dados['viagens'], vid)['destino']}",
+                )
+                viagem_sel = buscar_por_id(dados["viagens"], viagem_id)
 
-        tabela = df.sort_values("data", ascending=False).copy()
-        tabela["data"] = tabela["data"].dt.strftime("%d/%m/%Y")
-        tabela["status"] = tabela["status"].map(STATUS_OPCOES)
-        st.dataframe(
-            tabela.rename(columns=dict(zip(COLUNAS_EXPORT, CABECALHO_EXPORT))),
-            use_container_width=True, hide_index=True,
-        )
+                with st.expander("✏️ Editar esta viagem"):
+                    formulario_viagem(dados, viagem=viagem_sel)
 
-        st.divider()
-        st.subheader("Editar ou excluir uma viagem")
-        opcoes_id = [v["id"] for v in dados["viagens"]]
-        if opcoes_id:
-            viagem_id = st.selectbox(
-                "Selecione pelo ID", options=opcoes_id,
-                format_func=lambda vid: f"#{vid} — {buscar_por_id(dados['viagens'], vid)['origem']} → "
-                                         f"{buscar_por_id(dados['viagens'], vid)['destino']}",
-            )
-            viagem_sel = buscar_por_id(dados["viagens"], viagem_id)
+                if st.session_state.usuario["perfil"] == "gerente":
+                    if st.button("🗑️ Excluir viagem selecionada"):
+                        excluir_viagem(viagem_id)
+                        st.success("Viagem excluída.")
+                        st.rerun()
 
-            with st.expander("✏️ Editar esta viagem"):
-                formulario_viagem(dados, viagem=viagem_sel)
+            st.divider()
+            st.subheader("Exportar")
+            col_a, col_b, col_c, _ = st.columns([1, 1, 1, 3])
+            with col_a:
+                st.download_button("⬇ CSV", gerar_csv(df), "viagens.csv", "text/csv", use_container_width=True)
+            with col_b:
+                st.download_button(
+                    "⬇ Excel", gerar_xlsx(df), "viagens.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+            with col_c:
+                st.download_button("⬇ PDF", gerar_pdf(df), "viagens.pdf", "application/pdf", use_container_width=True)
 
-            if st.session_state.usuario["perfil"] == "gerente":
-                if st.button("🗑️ Excluir viagem selecionada"):
-                    excluir_viagem(viagem_id)
-                    st.success("Viagem excluída.")
-                    st.rerun()
+    st.divider()
+    col_voltar, col_sair, _ = st.columns([1, 1, 4])
+    with col_voltar:
+        if st.button("🔙 Voltar ao menu inicial", key="voltar_viagens", use_container_width=True):
+            st.session_state.pagina_atual = None
+            st.rerun()
+    with col_sair:
+        if st.button("🚪 Sair", key="sair_viagens", use_container_width=True):
+            st.session_state.usuario = None
+            st.session_state.pagina_atual = None
+            st.rerun()
 
 
 def pagina_motoristas(dados):
@@ -1379,6 +1676,18 @@ def pagina_motoristas(dados):
                         st.rerun()
         else:
             st.info("Nenhum motorista cadastrado.")
+
+    st.divider()
+    col_voltar, col_sair, _ = st.columns([1, 1, 4])
+    with col_voltar:
+        if st.button("🔙 Voltar ao menu inicial", key="voltar_motoristas", use_container_width=True):
+            st.session_state.pagina_atual = None
+            st.rerun()
+    with col_sair:
+        if st.button("🚪 Sair", key="sair_motoristas", use_container_width=True):
+            st.session_state.usuario = None
+            st.session_state.pagina_atual = None
+            st.rerun()
 
 
 def pagina_veiculos(dados):
@@ -1502,6 +1811,20 @@ def pagina_veiculos(dados):
                             st.rerun()
             else:
                 st.info("Nenhuma carreta cadastrada.")
+
+    st.divider()
+    col_voltar, col_sair, _ = st.columns([1, 1, 4])
+    with col_voltar:
+        if st.button("🔙 Voltar ao menu inicial", key="voltar_frota", use_container_width=True):
+            st.session_state.pagina_atual = None
+            st.rerun()
+    with col_sair:
+        if st.button("🚪 Sair", key="sair_frota", use_container_width=True):
+            st.session_state.usuario = None
+            st.session_state.pagina_atual = None
+            st.rerun()
+
+
 def pagina_combustivel(dados):
     st.title("Combustível")
 
@@ -1539,6 +1862,7 @@ def pagina_combustivel(dados):
 
         tabela = df.sort_values("data", ascending=False).copy()
         tabela["data"] = tabela["data"].dt.strftime("%d/%m/%Y")
+        tabela["km_rodado"] = tabela["km_rodado"].apply(lambda v: f"{v:.0f}" if pd.notna(v) else "-")
         st.dataframe(
             tabela.rename(columns=dict(zip(COLUNAS_EXPORT_COMBUSTIVEL, CABECALHO_EXPORT_COMBUSTIVEL))),
             use_container_width=True, hide_index=True,
@@ -1563,6 +1887,19 @@ def pagina_combustivel(dados):
                     excluir_abastecimento(abastecimento_id)
                     st.success("Abastecimento excluído.")
                     st.rerun()
+
+    st.divider()
+    col_voltar, col_sair, _ = st.columns([1, 1, 4])
+    with col_voltar:
+        if st.button("🔙 Voltar ao menu inicial", key="voltar_combustivel", use_container_width=True):
+            st.session_state.pagina_atual = None
+            st.rerun()
+    with col_sair:
+        if st.button("🚪 Sair", key="sair_combustivel", use_container_width=True):
+            st.session_state.usuario = None
+            st.session_state.pagina_atual = None
+            st.rerun()
+
 
 def pagina_usuarios(dados):
     st.title("Usuários")
@@ -1638,6 +1975,18 @@ def pagina_usuarios(dados):
                         st.success("Usuário excluído.")
                         st.rerun()
 
+    st.divider()
+    col_voltar, col_sair, _ = st.columns([1, 1, 4])
+    with col_voltar:
+        if st.button("🔙 Voltar ao menu inicial", key="voltar_usuarios", use_container_width=True):
+            st.session_state.pagina_atual = None
+            st.rerun()
+    with col_sair:
+        if st.button("🚪 Sair", key="sair_usuarios", use_container_width=True):
+            st.session_state.usuario = None
+            st.session_state.pagina_atual = None
+            st.rerun()
+
 
 # ----------------------------------------------------------------------
 # Navegação principal
@@ -1685,27 +2034,29 @@ def main():
         <style>
         [data-testid="stAppViewContainer"] {
             background-image: none !important;
-            background-color: initial !important;
+            background-color: #0f1c30 !important;
+        }
+        [data-testid="stAppViewContainer"] h1,
+        [data-testid="stAppViewContainer"] h2,
+        [data-testid="stAppViewContainer"] h3,
+        [data-testid="stAppViewContainer"] p,
+        [data-testid="stAppViewContainer"] label,
+        [data-testid="stAppViewContainer"] .stMarkdown,
+        [data-testid="stAppViewContainer"] .stCaption {
+            color: #e6e6e6 !important;
+        }
+        [data-testid="stSidebar"] {
+            background-color: #16213b !important;
+        }
+        [data-testid="stSidebar"] * {
+            color: #e6e6e6 !important;
         }
         </style>
         """,
         unsafe_allow_html=True,
     )
-
-    col_voltar, col_sair, _ = st.columns([1, 1, 4])
-    with col_voltar:
-        if st.button("🔙 Voltar ao menu inicial", use_container_width=True):
-            st.session_state.pagina_atual = None
-            st.rerun()
-    with col_sair:
-        if st.button("🚪 Sair", use_container_width=True):
-            st.session_state.usuario = None
-            st.session_state.pagina_atual = None
-            st.rerun()
-
-    st.divider()
-
     pagina = st.session_state.pagina_atual
+
     if pagina == "dashboard":
         pagina_dashboard(dados)
     elif pagina == "viagens":
